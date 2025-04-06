@@ -23,7 +23,7 @@ import (
 
 type mockClient struct {
 	mock.Mock
-	count *atomic.Int64
+	count *atomic.Int32
 }
 
 func (m *mockClient) PutTraceSegments(ctx context.Context, input *xray.PutTraceSegmentsInput, opts ...func(*xray.Options)) (*xray.PutTraceSegmentsOutput, error) {
@@ -44,7 +44,7 @@ func (m *mockClient) PutTelemetryRecords(ctx context.Context, input *xray.PutTel
 }
 
 func TestRotateRace(t *testing.T) {
-	client := &mockClient{count: &atomic.Int64{}}
+	client := &mockClient{count: &atomic.Int32{}}
 	client.On("PutTelemetryRecords", mock.Anything).Return(nil, nil).Once()
 	client.On("PutTelemetryRecords", mock.Anything).Return(nil, errors.New("error"))
 	sender := newSender(client, WithInterval(100*time.Millisecond))
@@ -114,7 +114,7 @@ func TestIncludeMetadata(t *testing.T) {
 
 func TestQueueOverflow(t *testing.T) {
 	obs, logs := observer.New(zap.DebugLevel)
-	client := &mockClient{count: &atomic.Int64{}}
+	client := &mockClient{count: &atomic.Int32{}}
 	client.On("PutTelemetryRecords", mock.Anything).Return(nil, nil).Once()
 	client.On("PutTelemetryRecords", mock.Anything).Return(nil, errors.New("test"))
 	
@@ -142,7 +142,7 @@ func TestQueueOverflow(t *testing.T) {
 	
 	// verify that sent back of queue
 	for _, record := range sender.queue {
-		assert.Greater(t, *record.SegmentsSentCount, int64(5))
-		assert.LessOrEqual(t, *record.SegmentsSentCount, int64(20))
+		assert.Greater(t, *record.SegmentsSentCount, int32(5))
+		assert.LessOrEqual(t, *record.SegmentsSentCount, int32(20))
 	}
 }
