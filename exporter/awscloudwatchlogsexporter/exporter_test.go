@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -62,9 +62,13 @@ func TestLogToCWLog(t *testing.T) {
 			config:   &Config{},
 			want: cwlogs.Event{
 				GeneratedTime: time.Now(),
-				InputLogEvent: &cloudwatchlogs.InputLogEvent{
-					Timestamp: aws.Int64(1609719139),
-					Message:   aws.String(`{"body":"hello world","severity_number":5,"severity_text":"debug","dropped_attributes_count":4,"flags":1,"trace_id":"0102030405060708090a0b0c0d0e0f10","span_id":"0102030405060708","attributes":{"key1":1,"key2":"attr2"},"scope":{"name":"test-scope","version":"1.0.0","attributes":{"scope-attr":"value"}},"resource":{"host":"abc123","node":5}}`),
+				InputLogEvent: &cloudwatchlogs.PutLogEventsInput{
+					LogEvents: []cwlogs.InputLogEvent{
+						{
+							Timestamp: aws.Int64(1609719139),
+							Message:   aws.String(`{"body":"hello world","severity_number":5,"severity_text":"debug","dropped_attributes_count":4,"flags":1,"trace_id":"0102030405060708090a0b0c0d0e0f10","span_id":"0102030405060708","attributes":{"key1":1,"key2":"attr2"},"scope":{"name":"test-scope","version":"1.0.0","attributes":{"scope-attr":"value"}},"resource":{"host":"abc123","node":5}}`),
+						},
+					},
 				},
 				StreamKey: cwlogs.StreamKey{
 					LogGroupName:  "",
@@ -80,9 +84,13 @@ func TestLogToCWLog(t *testing.T) {
 			config:   &Config{},
 			want: cwlogs.Event{
 				GeneratedTime: time.Now(),
-				InputLogEvent: &cloudwatchlogs.InputLogEvent{
-					Timestamp: aws.Int64(1609719139),
-					Message:   aws.String(`{"body":"hello world","severity_number":5,"severity_text":"debug","dropped_attributes_count":4,"flags":1,"trace_id":"0102030405060708090a0b0c0d0e0f10","span_id":"0102030405060708","attributes":{"key1":1,"key2":"attr2"},"scope":{"name":"test-scope","version":"1.0.0","attributes":{"scope-attr":"value"}}}`),
+				InputLogEvent: &cloudwatchlogs.PutLogEventsInput{
+					LogEvents: []cwlogs.InputLogEvent{
+						{
+							Timestamp: aws.Int64(1609719139),
+							Message:   aws.String(`{"body":"hello world","severity_number":5,"severity_text":"debug","dropped_attributes_count":4,"flags":1,"trace_id":"0102030405060708090a0b0c0d0e0f10","span_id":"0102030405060708","attributes":{"key1":1,"key2":"attr2"},"scope":{"name":"test-scope","version":"1.0.0","attributes":{"scope-attr":"value"}}}`),
+						},
+					},
 				},
 				StreamKey: cwlogs.StreamKey{
 					LogGroupName:  "",
@@ -98,9 +106,13 @@ func TestLogToCWLog(t *testing.T) {
 			config:   &Config{},
 			want: cwlogs.Event{
 				GeneratedTime: time.Now(),
-				InputLogEvent: &cloudwatchlogs.InputLogEvent{
-					Timestamp: aws.Int64(1609719139),
-					Message:   aws.String(`{"body":"hello world","severity_number":5,"severity_text":"debug","dropped_attributes_count":4,"flags":1,"trace_id":"0102030405060708090a0b0c0d0e0f10","span_id":"0102030405060708","attributes":{"key1":1,"key2":"attr2"},"resource":{"host":"abc123","node":5}}`),
+				InputLogEvent: &cloudwatchlogs.PutLogEventsInput{
+					LogEvents: []cwlogs.InputLogEvent{
+						{
+							Timestamp: aws.Int64(1609719139),
+							Message:   aws.String(`{"body":"hello world","severity_number":5,"severity_text":"debug","dropped_attributes_count":4,"flags":1,"trace_id":"0102030405060708090a0b0c0d0e0f10","span_id":"0102030405060708","attributes":{"key1":1,"key2":"attr2"},"resource":{"host":"abc123","node":5}}`),
+						},
+					},
 				},
 				StreamKey: cwlogs.StreamKey{
 					LogGroupName:  "",
@@ -119,9 +131,13 @@ func TestLogToCWLog(t *testing.T) {
 			},
 			want: cwlogs.Event{
 				GeneratedTime: time.Now(),
-				InputLogEvent: &cloudwatchlogs.InputLogEvent{
-					Timestamp: aws.Int64(1609719139),
-					Message:   aws.String(`{"body":"hello world","severity_number":5,"severity_text":"debug","dropped_attributes_count":4,"attributes":{"key1":1,"key2":"attr2"},"scope":{"name":"test-scope","version":"1.0.0","attributes":{"scope-attr":"value"}},"resource":{"host":"abc123","node":5}}`),
+				InputLogEvent: &cloudwatchlogs.PutLogEventsInput{
+					LogEvents: []cwlogs.InputLogEvent{
+						{
+							Timestamp: aws.Int64(1609719139),
+							Message:   aws.String(`{"body":"hello world","severity_number":5,"severity_text":"debug","dropped_attributes_count":4,"attributes":{"key1":1,"key2":"attr2"},"scope":{"name":"test-scope","version":"1.0.0","attributes":{"scope-attr":"value"}},"resource":{"host":"abc123","node":5}}`),
+						},
+					},
 				},
 				StreamKey: cwlogs.StreamKey{
 					LogGroupName:  "tLogGroup",
@@ -141,9 +157,13 @@ func TestLogToCWLog(t *testing.T) {
 			},
 			want: cwlogs.Event{
 				GeneratedTime: time.Now(),
-				InputLogEvent: &cloudwatchlogs.InputLogEvent{
-					Timestamp: aws.Int64(1609719139),
-					Message:   aws.String(`hello world`),
+				InputLogEvent: &cloudwatchlogs.PutLogEventsInput{
+					LogEvents: []cwlogs.InputLogEvent{
+						{
+							Timestamp: aws.Int64(1609719139),
+							Message:   aws.String(`hello world`),
+						},
+					},
 				},
 				StreamKey: cwlogs.StreamKey{
 					LogGroupName:  "tLogGroup",
@@ -163,9 +183,13 @@ func TestLogToCWLog(t *testing.T) {
 			},
 			want: cwlogs.Event{
 				GeneratedTime: time.Now(),
-				InputLogEvent: &cloudwatchlogs.InputLogEvent{
-					Timestamp: aws.Int64(1609719139),
-					Message:   aws.String(`{"_aws":{"Timestamp":1574109732004,"LogGroupName":"Foo","CloudWatchMetrics":[{"Namespace":"MyApp","Dimensions":[["Operation"]],"Metrics":[{"Name":"ProcessingLatency","Unit":"Milliseconds","StorageResolution":60}]}]},"Operation":"Aggregator","ProcessingLatency":100}`),
+				InputLogEvent: &cloudwatchlogs.PutLogEventsInput{
+					LogEvents: []cwlogs.InputLogEvent{
+						{
+							Timestamp: aws.Int64(1609719139),
+							Message:   aws.String(`{"_aws":{"Timestamp":1574109732004,"LogGroupName":"Foo","CloudWatchMetrics":[{"Namespace":"MyApp","Dimensions":[["Operation"]],"Metrics":[{"Name":"ProcessingLatency","Unit":"Milliseconds","StorageResolution":60}]}]},"Operation":"Aggregator","ProcessingLatency":100}`),
+						},
+					},
 				},
 				StreamKey: cwlogs.StreamKey{
 					LogGroupName:  "Foo",
@@ -185,9 +209,13 @@ func TestLogToCWLog(t *testing.T) {
 			},
 			want: cwlogs.Event{
 				GeneratedTime: time.Now(),
-				InputLogEvent: &cloudwatchlogs.InputLogEvent{
-					Timestamp: aws.Int64(1609719139),
-					Message:   aws.String(`{"_aws":{"Timestamp":1574109732004,"LogGroupName":"Foo","LogStreamName":"Foo","CloudWatchMetrics":[{"Namespace":"MyApp","Dimensions":[["Operation"]],"Metrics":[{"Name":"ProcessingLatency","Unit":"Milliseconds","StorageResolution":60}]}]},"Operation":"Aggregator","ProcessingLatency":100}`),
+				InputLogEvent: &cloudwatchlogs.PutLogEventsInput{
+					LogEvents: []cwlogs.Event{
+						{
+							Timestamp: aws.Int64(1609719139),
+							Message:   aws.String(`{"_aws":{"Timestamp":1574109732004,"LogGroupName":"Foo","LogStreamName":"Foo","CloudWatchMetrics":[{"Namespace":"MyApp","Dimensions":[["Operation"]],"Metrics":[{"Name":"ProcessingLatency","Unit":"Milliseconds","StorageResolution":60}]}]},"Operation":"Aggregator","ProcessingLatency":100}`),
+						},
+					},
 				},
 				StreamKey: cwlogs.StreamKey{
 					LogGroupName:  "Foo",
@@ -207,9 +235,13 @@ func TestLogToCWLog(t *testing.T) {
 			},
 			want: cwlogs.Event{
 				GeneratedTime: time.Now(),
-				InputLogEvent: &cloudwatchlogs.InputLogEvent{
-					Timestamp: aws.Int64(1609719139),
-					Message:   aws.String(`{"Timestamp":1574109732004,"log_group_name":"Foo","CloudWatchMetrics":[{"Namespace":"MyApp","Dimensions":[["Operation"]],"Metrics":[{"Name":"ProcessingLatency","Unit":"Milliseconds","StorageResolution":60}]}],"Operation":"Aggregator","ProcessingLatency":100}`),
+				InputLogEvent: &cloudwatchlogs.PutLogEventsInput{
+					LogEvents: []cwlogs.InputLogEvent{
+						{
+							Timestamp: aws.Int64(1609719139),
+							Message:   aws.String(`{"Timestamp":1574109732004,"log_group_name":"Foo","CloudWatchMetrics":[{"Namespace":"MyApp","Dimensions":[["Operation"]],"Metrics":[{"Name":"ProcessingLatency","Unit":"Milliseconds","StorageResolution":60}]}],"Operation":"Aggregator","ProcessingLatency":100}`),
+						},
+					},
 				},
 				StreamKey: cwlogs.StreamKey{
 					LogGroupName:  "Foo",
@@ -229,9 +261,13 @@ func TestLogToCWLog(t *testing.T) {
 			},
 			want: cwlogs.Event{
 				GeneratedTime: time.Now(),
-				InputLogEvent: &cloudwatchlogs.InputLogEvent{
-					Timestamp: aws.Int64(1609719139),
-					Message:   aws.String(`{"Timestamp":1574109732004,"log_group_name":"Foo","log_stream_name":"Foo","CloudWatchMetrics":[{"Namespace":"MyApp","Dimensions":[["Operation"]],"Metrics":[{"Name":"ProcessingLatency","Unit":"Milliseconds","StorageResolution":60}]}],"Operation":"Aggregator","ProcessingLatency":100}`),
+				InputLogEvent: &cloudwatchlogs.PutLogEventsInput{
+					LogEvents: []cwlogs.InputLogEvent{
+						{
+							Timestamp: aws.Int64(1609719139),
+							Message:   aws.String(`{"Timestamp":1574109732004,"log_group_name":"Foo","log_stream_name":"Foo","CloudWatchMetrics":[{"Namespace":"MyApp","Dimensions":[["Operation"]],"Metrics":[{"Name":"ProcessingLatency","Unit":"Milliseconds","StorageResolution":60}]}],"Operation":"Aggregator","ProcessingLatency":100}`),
+						},
+					},
 				},
 				StreamKey: cwlogs.StreamKey{
 					LogGroupName:  "Foo",
@@ -250,7 +286,7 @@ func TestLogToCWLog(t *testing.T) {
 				return
 			}
 			// Do not test generated time since it is time.Now()
-			assert.Equal(t, *tt.want.InputLogEvent, *got.InputLogEvent)
+			assert.Equal(t, tt.want.InputLogEvent.LogEvents[0].Message, got.InputLogEvent.LogEvents[0].Message)
 			assert.Equal(t, tt.want.LogStreamName, got.LogStreamName)
 			assert.Equal(t, tt.want.LogGroupName, got.LogGroupName)
 		})

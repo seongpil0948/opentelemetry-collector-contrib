@@ -20,6 +20,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/awsutil"
 )
 
+// NewFactory creates a factory for the CloudWatch Logs exporter
 func NewFactory() exporter.Factory {
 	return exporter.NewFactory(
 		metadata.Type,
@@ -29,7 +30,7 @@ func NewFactory() exporter.Factory {
 
 func createDefaultConfig() component.Config {
 	queueSettings := exporterhelper.NewDefaultQueueConfig()
-	// For backwards compatibilitiy, we default to 1 consumer
+	// For backwards compatibility, we default to 1 consumer
 	queueSettings.NumConsumers = 1
 
 	return &Config{
