@@ -371,7 +371,7 @@ func TestSetTags_Called(t *testing.T) {
 	resourceNotFoundException := &types.ResourceNotFoundException{}
 
 	avalue := "avalue"
-	sampleTags := map[string]*string{"akey": &avalue}
+	sampleTags := map[string]string{"akey": avalue}
 
 	svc.On("PutLogEvents", mock.Anything, putLogEventsInput, mock.Anything).Return(putLogEventsOutput, resourceNotFoundException).Once()
 

@@ -38,7 +38,7 @@ type CloudWatchLogsClient interface {
 type Client struct {
 	svc          CloudWatchLogsClient
 	logRetention int64
-	tags         map[string]*string
+	tags         map[string]string // 올바른 타입 지정
 	logger       *zap.Logger
 }
 
@@ -55,7 +55,7 @@ func WithUserAgentExtras(userAgentExtras ...string) ClientOption {
 }
 
 // Create a log client based on the actual cloudwatch logs client.
-func newCloudWatchLogClient(svc CloudWatchLogsClient, logRetention int64, tags map[string]*string, logger *zap.Logger) *Client {
+func newCloudWatchLogClient(svc CloudWatchLogsClient, logRetention int64, tags map[string]string, logger *zap.Logger) *Client {
 	logClient := &Client{
 		svc:          svc,
 		logRetention: logRetention,
@@ -66,7 +66,7 @@ func newCloudWatchLogClient(svc CloudWatchLogsClient, logRetention int64, tags m
 }
 
 // NewClient creates a new CloudWatch Logs client
-func NewClient(logger *zap.Logger, awsConfig aws.Config, buildInfo component.BuildInfo, logGroupName string, logRetention int64, tags map[string]*string, componentName string, opts ...ClientOption) *Client {
+func NewClient(logger *zap.Logger, awsConfig aws.Config, buildInfo component.BuildInfo, logGroupName string, logRetention int64, tags map[string]string, componentName string, opts ...ClientOption) *Client {
 	// Create the client with aws configuration
 	client := cloudwatchlogs.NewFromConfig(awsConfig)
 
