@@ -99,7 +99,7 @@ func newCwLogsPusher(expConfig *Config, params exp.Settings) (*cwlExporter, erro
 	}
 
 	// create CWLogs client with aws session config
-	svcStructuredLog := cwlogs.NewClient(params.Logger, awsConfig, params.BuildInfo, expConfig.LogGroupName, expConfig.LogRetention, expConfig.Tags, metadata.Type.String())
+	svcStructuredLog := cwlogs.NewClient(params.Logger, awsConfig, params.BuildInfo, expConfig.LogGroupName, int32(expConfig.LogRetention), expConfig.Tags, metadata.Type.String())
 	collectorIdentifier, err := uuid.NewRandom()
 	if err != nil {
 		return nil, err
@@ -140,16 +140,16 @@ func newCwLogsExporter(config component.Config, params exp.Settings) (exp.Logs, 
 	)
 }
 
-func (e *cwlExporter) consumeLogs(_ context.Context, ld plog.Logs) error {
+func (e *cwlExporter) consumeLogs(ctx context.Context, ld plog.Logs) error {
 	pusher := e.pusherFactory.CreateMultiStreamPusher()
 	var errs error
 
-	err := pushLogsToCWLogs(e.logger, ld, e.Config, pusher)
+	err := pushLogsToCWLogs(ctx, e.logger, ld, e.Config, pusher)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("Error pushing logs: %w", err))
 	}
 
-	err = pusher.ForceFlush()
+	err = pusher.ForceFlush(ctx)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("Error flushing logs: %w", err))
 	}
@@ -161,7 +161,7 @@ func (e *cwlExporter) shutdown(_ context.Context) error {
 	return nil
 }
 
-func pushLogsToCWLogs(logger *zap.Logger, ld plog.Logs, config *Config, pusher cwlogs.Pusher) error {
+func pushLogsToCWLogs(ctx context.Context, logger *zap.Logger, ld plog.Logs, config *Config, pusher cwlogs.Pusher) error {
 	n := ld.ResourceLogs().Len()
 
 	if n == 0 {
@@ -186,7 +186,7 @@ func pushLogsToCWLogs(logger *zap.Logger, ld plog.Logs, config *Config, pusher c
 				if err != nil {
 					logger.Debug("Failed to convert to CloudWatch Log", zap.Error(err))
 				} else {
-					err := pusher.AddLogEntry(event)
+					err := pusher.AddLogEntry(ctx, event)
 					if err != nil {
 						errs = errors.Join(errs, err)
 					}

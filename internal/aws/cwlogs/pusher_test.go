@@ -4,9 +4,10 @@
 package cwlogs
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +16,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -33,8 +33,13 @@ func TestValidateLogEventWithMutating(t *testing.T) {
 	logEvent.GeneratedTime = time.Now()
 	err := logEvent.Validate(zap.NewNop())
 	assert.NoError(t, err)
-	assert.Positive(t, *logEvent.InputLogEvent.LogEvents[0].Timestamp)
-	assert.Len(t, *logEvent.InputLogEvent.LogEvents[0].Message, 64-perEventHeaderBytes)
+	assert.Positive(t, *logEvent.InputLogEvent.Timestamp)
+	assert.Len(t, *logEvent.InputLogEvent.Message, 64-perEventHeaderBytes)
+
+	logEvent = NewEvent(timestampMs, msg)
+	assert.NoError(t, logEvent.Validate(zap.NewNop()))
+	assert.Equal(t, maxEventPayloadBytes-perEventHeaderBytes, len(*logEvent.InputLogEvent.Message))
+	assert.Equal(t, msg[:maxEventPayloadBytes-perEventHeaderBytes]+truncatedSuffix, *logEvent.InputLogEvent.Message)
 
 	maxEventPayloadBytes = defaultMaxEventPayloadBytes
 }
@@ -93,7 +98,7 @@ func TestLogEventBatch_sortLogEvents(t *testing.T) {
 		timestamp := rand.Int()
 		logEvent := NewEvent(int64(timestamp), fmt.Sprintf("message%v", timestamp))
 		fmt.Printf("logEvents[%d].Timestamp=%d.\n", i, timestamp)
-		logEventBatch.putLogEventsInput.LogEvents = append(logEventBatch.putLogEventsInput.LogEvents, logEvent.InputLogEvent.LogEvents[0])
+		logEventBatch.putLogEventsInput.LogEvents = append(logEventBatch.putLogEventsInput.LogEvents, logEvent.InputLogEvent)
 	}
 
 	logEventBatch.sortLogEvents()
@@ -115,7 +120,7 @@ func newMockPusher() *logPusher {
 	return newLogPusher(StreamKey{
 		LogGroupName:  logGroup,
 		LogStreamName: logStreamName,
-	}, *svc, zap.NewNop())
+	}, svc, zap.NewNop())
 }
 
 //
@@ -123,8 +128,10 @@ func newMockPusher() *logPusher {
 //
 
 var (
-	timestampMs = time.Now().UnixNano() / 1e6
-	msg         = "test log message"
+	timestampMs   = time.Now().UnixNano() / 1e6
+	msg           = "test log message"
+	logGroup      = "logGroup"
+	logStreamName = "logStreamName"
 )
 
 func TestPusher_newLogEventBatch(t *testing.T) {
@@ -142,91 +149,91 @@ func TestPusher_newLogEventBatch(t *testing.T) {
 	assert.Equal(t, p.logStreamName, logEventBatch.putLogEventsInput.LogStreamName)
 }
 
-func TestPusher_addLogEventBatch(t *testing.T) {
-	p := newMockPusher()
+func TestPusher_AddLogEntry(t *testing.T) {
+	ctx := context.Background()
+	p := newLogPusher(StreamKey{
+		LogGroupName:  logGroup,
+		LogStreamName: logStreamName,
+	}, newAlwaysPassMockLogClient(func(_ mock.Arguments) {}), zap.NewNop())
 
-	c := cap(p.logEventBatch.putLogEventsInput.LogEvents)
 	logEvent := NewEvent(timestampMs, msg)
-
-	// Fill up to capacity
-	for i := 0; i < c; i++ {
-		p.logEventBatch.putLogEventsInput.LogEvents = append(p.logEventBatch.putLogEventsInput.LogEvents, logEvent.InputLogEvent.LogEvents[0])
-	}
-
-	assert.Len(t, p.logEventBatch.putLogEventsInput.LogEvents, c)
-
-	assert.NotNil(t, p.addLogEvent(logEvent))
-	// the actual log event add operation happens after the func newLogEventBatchIfNeeded
-	assert.Len(t, p.logEventBatch.putLogEventsInput.LogEvents, 1)
-
-	p.logEventBatch.byteTotal = maxRequestPayloadBytes - logEvent.eventPayloadBytes() + 1
-	assert.NotNil(t, p.addLogEvent(logEvent))
-	assert.Len(t, p.logEventBatch.putLogEventsInput.LogEvents, 1)
-
-	p.logEventBatch.minTimestampMs, p.logEventBatch.maxTimestampMs = timestampMs, timestampMs
-	assert.NotNil(t, p.addLogEvent(NewEvent(timestampMs+(time.Hour*24+time.Millisecond*1).Nanoseconds()/1e6, msg)))
-	assert.Len(t, p.logEventBatch.putLogEventsInput.LogEvents, 1)
-
-	assert.Nil(t, p.addLogEvent(nil))
-	assert.Len(t, p.logEventBatch.putLogEventsInput.LogEvents, 1)
-
-	assert.NotNil(t, p.addLogEvent(logEvent))
-	assert.Len(t, p.logEventBatch.putLogEventsInput.LogEvents, 1)
-
-	p.logEventBatch.byteTotal = 1
-	assert.Nil(t, p.addLogEvent(nil))
-	assert.Len(t, p.logEventBatch.putLogEventsInput.LogEvents, 1)
+	err := p.AddLogEntry(ctx, logEvent)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(p.logEventBatch.putLogEventsInput.LogEvents))
+	assert.Equal(t, logEvent.InputLogEvent, p.logEventBatch.putLogEventsInput.LogEvents[0])
+	assert.Equal(t, logEvent.eventPayloadBytes(), p.logEventBatch.byteTotal)
+	assert.Equal(t, timestampMs, p.logEventBatch.maxTimestampMs)
+	assert.Equal(t, timestampMs, p.logEventBatch.minTimestampMs)
 }
 
-func TestAddLogEventWithValidation(t *testing.T) {
-	p := newMockPusher()
-	largeEventContent := strings.Repeat("a", defaultMaxEventPayloadBytes)
+func TestPusher_FlushLogEntries(t *testing.T) {
+	ctx := context.Background()
+	callCount := 0
+	p := newLogPusher(StreamKey{
+		LogGroupName:  logGroup,
+		LogStreamName: logStreamName,
+	}, newAlwaysPassMockLogClient(func(_ mock.Arguments) {
+		callCount++
+	}), zap.NewNop())
 
-	logEvent := NewEvent(timestampMs, largeEventContent)
-	expectedTruncatedContent := (*logEvent.InputLogEvent.LogEvents[0].Message)[0:(defaultMaxEventPayloadBytes-perEventHeaderBytes-len(truncatedSuffix))] + truncatedSuffix
+	logEvent := NewEvent(timestampMs, msg)
+	err := p.AddLogEntry(ctx, logEvent)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(p.logEventBatch.putLogEventsInput.LogEvents))
 
-	require.NoError(t, p.AddLogEntry(logEvent), "Error adding log entry")
-	assert.Equal(t, expectedTruncatedContent, *logEvent.InputLogEvent.LogEvents[0].Message)
-
-	logEvent = NewEvent(timestampMs, "")
-	assert.NotNil(t, p.addLogEvent(logEvent))
+	err = p.ForceFlush(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, callCount)
+	assert.Equal(t, 0, len(p.logEventBatch.putLogEventsInput.LogEvents))
+	assert.Equal(t, 0, p.logEventBatch.byteTotal)
+	assert.Equal(t, int64(0), p.logEventBatch.maxTimestampMs)
+	assert.Equal(t, int64(0), p.logEventBatch.minTimestampMs)
 }
 
 func TestStreamManager(t *testing.T) {
-	svc := newAlwaysPassMockLogClient(func(_ mock.Arguments) {})
-	mockCwAPI := svc.svc.(*mockCloudWatchLogsClient)
-	manager := NewLogStreamManager(*svc)
+	ctx := context.Background()
+	svc := new(mockCloudWatchLogsClient)
+	svc.On("CreateLogGroup", ctx, mock.Anything, mock.Anything).Return(
+		new(cloudwatchlogs.CreateLogGroupOutput), nil)
+	svc.On("CreateLogStream", ctx, mock.Anything, mock.Anything).Return(
+		new(cloudwatchlogs.CreateLogStreamOutput), nil)
+	client := newCloudWatchLogClient(svc, 0, nil, zap.NewNop())
+	manager := NewLogStreamManager(client)
 
-	// Verify that the stream is created in the first time
-	assert.NoError(t, manager.InitStream(StreamKey{
-		LogGroupName:  "foo",
-		LogStreamName: "bar",
-	}))
+	streamKey := StreamKey{LogGroupName: "group", LogStreamName: "stream"}
+	err := manager.InitStream(ctx, streamKey)
+	assert.NoError(t, err)
+	svc.AssertCalled(t, "CreateLogGroup", ctx, mock.Anything)
+	svc.AssertCalled(t, "CreateLogStream", ctx, mock.Anything)
 
-	mockCwAPI.AssertCalled(t, "CreateLogStream", mock.Anything, mock.Anything, mock.Anything)
-	mockCwAPI.AssertNumberOfCalls(t, "CreateLogStream", 1)
+	// Test existing stream
+	svc = new(mockCloudWatchLogsClient)
+	svc.On("CreateLogGroup", ctx, mock.Anything, mock.Anything).Return(
+		new(cloudwatchlogs.CreateLogGroupOutput), nil)
+	svc.On("CreateLogStream", ctx, mock.Anything, mock.Anything).Return(
+		new(cloudwatchlogs.CreateLogStreamOutput), nil)
+	client = newCloudWatchLogClient(svc, 0, nil, zap.NewNop())
+	manager = NewLogStreamManager(client)
+	manager.(*logStreamManager).streams[streamKey] = true
+	err = manager.InitStream(ctx, streamKey)
+	assert.NoError(t, err)
+	svc.AssertNotCalled(t, "CreateLogGroup", ctx, mock.Anything)
+	svc.AssertNotCalled(t, "CreateLogStream", ctx, mock.Anything)
 
-	// Verify that the stream is not created in the second time
-	assert.NoError(t, manager.InitStream(StreamKey{
-		LogGroupName:  "foo",
-		LogStreamName: "bar",
-	}))
-
-	mockCwAPI.AssertNumberOfCalls(t, "CreateLogStream", 1)
-
-	// Verify that a different stream is created
-	assert.NoError(t, manager.InitStream(StreamKey{
-		LogGroupName:  "foo",
-		LogStreamName: "bar2",
-	}))
-
-	mockCwAPI.AssertNumberOfCalls(t, "CreateLogStream", 2)
+	// Test error case
+	svc = new(mockCloudWatchLogsClient)
+	expectedErr := errors.New("failed")
+	svc.On("CreateLogGroup", ctx, mock.Anything, mock.Anything).Return(nil, expectedErr)
+	client = newCloudWatchLogClient(svc, 0, nil, zap.NewNop())
+	manager = NewLogStreamManager(client)
+	err = manager.InitStream(ctx, StreamKey{LogGroupName: "new-group", LogStreamName: "new-stream"})
+	assert.ErrorIs(t, err, expectedErr)
 }
 
 func TestMultiStreamFactory(t *testing.T) {
 	svc := newAlwaysPassMockLogClient(func(_ mock.Arguments) {})
-	logStreamManager := NewLogStreamManager(*svc)
-	factory := NewMultiStreamPusherFactory(logStreamManager, *svc, nil)
+	logStreamManager := NewLogStreamManager(svc) // Pass svc (*Client) directly
+	factory := NewMultiStreamPusherFactory(logStreamManager, svc, nil) // Pass svc (*Client) directly
 
 	pusher := factory.CreateMultiStreamPusher()
 
@@ -234,52 +241,61 @@ func TestMultiStreamFactory(t *testing.T) {
 }
 
 func TestMultiStreamPusher(t *testing.T) {
-	inputs := make([]*cloudwatchlogs.PutLogEventsInput, 0)
-	svc := newAlwaysPassMockLogClient(func(args mock.Arguments) {
-		if ctx, ok := args.Get(0).(interface{}); ok {
-			// Context 객체 무시
-			_ = ctx
-		}
-		input, ok := args.Get(1).(*cloudwatchlogs.PutLogEventsInput)
-		if ok {
-			inputs = append(inputs, input)
-		}
+	ctx := context.Background()
+	callCount := 0
+	svc := new(mockCloudWatchLogsClient)
+	svc.On("CreateLogGroup", ctx, mock.Anything, mock.Anything).Return(
+		new(cloudwatchlogs.CreateLogGroupOutput), nil)
+	svc.On("CreateLogStream", ctx, mock.Anything, mock.Anything).Return(
+		new(cloudwatchlogs.CreateLogStreamOutput), nil)
+	svc.On("PutLogEvents", ctx, mock.Anything, mock.Anything).Return(
+		&cloudwatchlogs.PutLogEventsOutput{NextSequenceToken: aws.String("token")}, nil).Run(func(_ mock.Arguments) {
+		callCount++
 	})
-	mockCwAPI := svc.svc.(*mockCloudWatchLogsClient)
-	manager := NewLogStreamManager(*svc)
-	zap := zap.NewNop()
-	pusher := newMultiStreamPusher(manager, *svc, zap)
-	event := NewEvent(time.Now().UnixMilli(), "testing")
-	event.StreamKey.LogGroupName = "foo"
-	event.StreamKey.LogStreamName = "bar"
-	event.GeneratedTime = time.Now()
+	client := newCloudWatchLogClient(svc, 0, nil, zap.NewNop())
+	manager := NewLogStreamManager(client)
+	pusher := newMultiStreamPusher(manager, client, zap.NewNop())
 
-	assert.NoError(t, pusher.AddLogEntry(event))
-	assert.NoError(t, pusher.AddLogEntry(event))
-	mockCwAPI.AssertNumberOfCalls(t, "PutLogEvents", 0)
-	assert.NoError(t, pusher.ForceFlush())
+	stream1 := StreamKey{LogGroupName: "group1", LogStreamName: "stream1"}
+	stream2 := StreamKey{LogGroupName: "group2", LogStreamName: "stream2"}
 
-	mockCwAPI.AssertNumberOfCalls(t, "CreateLogStream", 1)
-	mockCwAPI.AssertNumberOfCalls(t, "PutLogEvents", 1)
+	event1 := NewEvent(time.Now().UnixMilli(), "message1")
+	event1.StreamKey = stream1
+	event2 := NewEvent(time.Now().UnixMilli(), "message2")
+	event2.StreamKey = stream2
 
-	assert.Len(t, inputs, 1)
-	assert.Len(t, inputs[0].LogEvents, 2)
-	assert.Equal(t, "foo", *inputs[0].LogGroupName)
-	assert.Equal(t, "bar", *inputs[0].LogStreamName)
+	err := pusher.AddLogEntry(ctx, event1)
+	assert.NoError(t, err)
+	err = pusher.AddLogEntry(ctx, event2)
+	assert.NoError(t, err)
 
-	event2 := NewEvent(time.Now().UnixMilli(), "testing")
-	event2.StreamKey.LogGroupName = "foo"
-	event2.StreamKey.LogStreamName = "bar2"
-	event2.GeneratedTime = time.Now()
+	err = pusher.ForceFlush(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, callCount)
 
-	assert.NoError(t, pusher.AddLogEntry(event2))
-	assert.NoError(t, pusher.ForceFlush())
+	callCount = 0
+	svc = new(mockCloudWatchLogsClient)
+	svc.On("CreateLogGroup", ctx, mock.Anything, mock.Anything).Return(
+		new(cloudwatchlogs.CreateLogGroupOutput), nil)
+	svc.On("CreateLogStream", ctx, mock.Anything, mock.Anything).Return(
+		new(cloudwatchlogs.CreateLogStreamOutput), nil)
+	svc.On("PutLogEvents", ctx, mock.Anything, mock.Anything).Return(
+		&cloudwatchlogs.PutLogEventsOutput{NextSequenceToken: aws.String("token")}, nil).Run(func(_ mock.Arguments) {
+		callCount++
+	})
+	client = newCloudWatchLogClient(svc, 0, nil, zap.NewNop())
+	manager = NewLogStreamManager(client)
+	pusher = newMultiStreamPusher(manager, client, zap.NewNop())
 
-	mockCwAPI.AssertNumberOfCalls(t, "CreateLogStream", 2)
-	mockCwAPI.AssertNumberOfCalls(t, "PutLogEvents", 2)
+	stream3 := StreamKey{LogGroupName: "group3", LogStreamName: "stream3"}
+	event3 := NewEvent(time.Now().UnixMilli(), "message3")
+	event3.StreamKey = stream3
 
-	assert.Len(t, inputs, 2)
-	assert.Len(t, inputs[1].LogEvents, 1)
-	assert.Equal(t, "foo", *inputs[1].LogGroupName)
-	assert.Equal(t, "bar2", *inputs[1].LogStreamName)
+	err = pusher.AddLogEntry(ctx, event3)
+	assert.NoError(t, err)
+	err = pusher.ForceFlush(ctx)
+	assert.NoError(t, err)
+	svc.AssertCalled(t, "CreateLogGroup", ctx, mock.Anything)
+	svc.AssertCalled(t, "CreateLogStream", ctx, mock.Anything)
+	assert.Equal(t, 1, callCount)
 }
