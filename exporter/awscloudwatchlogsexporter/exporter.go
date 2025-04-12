@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
@@ -23,7 +25,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awscloudwatchlogsexporter/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/awsutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/cwlogs"
 )
 
@@ -54,27 +55,64 @@ func newCwLogsPusher(expConfig *Config, params exp.Settings) (*cwlExporter, erro
 
 	expConfig.logger = params.Logger
 
-	// create AWS session
-	awsConfig, session, err := awsutil.GetAWSConfigSession(params.Logger, &awsutil.Conn{}, &expConfig.AWSSessionSettings)
+	// Create AWS config using v2 SDK directly
+	awsOpts := []func(*config.LoadOptions) error{}
+	
+	// Apply region if specified
+	if expConfig.Region != "" {
+		awsOpts = append(awsOpts, config.WithRegion(expConfig.Region))
+	}
+	
+	// Apply endpoint if specified
+	if expConfig.Endpoint != "" {
+		customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
+			return aws.Endpoint{
+				URL:           expConfig.Endpoint,
+				SigningRegion: region,
+			}, nil
+		})
+		awsOpts = append(awsOpts, config.WithEndpointResolverWithOptions(customResolver))
+	}
+	
+	// Apply max retries
+	if expConfig.MaxRetries > 0 {
+		awsOpts = append(awsOpts, config.WithRetryMaxAttempts(int(expConfig.MaxRetries)))
+	}
+	
+	// Load configuration
+	awsConfig, err := config.LoadDefaultConfig(context.Background(), awsOpts...)
 	if err != nil {
 		return nil, err
 	}
+	
+	// Apply IAM role credentials if configured
+	if expConfig.RoleARN != "" {
+		stsSvc := sts.NewFromConfig(awsConfig)
+		
+		assumeRoleProvider := stscreds.NewAssumeRoleProvider(stsSvc, expConfig.RoleARN, func(o *stscreds.AssumeRoleOptions) {
+			if expConfig.ExternalID != "" {
+				o.ExternalID = &expConfig.ExternalID
+			}
+		})
+		
+		awsConfig.Credentials = aws.NewCredentialsCache(assumeRoleProvider)
+	}
 
 	// create CWLogs client with aws session config
-	svcStructuredLog := cwlogs.NewClient(params.Logger, awsConfig, params.BuildInfo, expConfig.LogGroupName, expConfig.LogRetention, expConfig.Tags, session, metadata.Type.String())
+	svcStructuredLog := cwlogs.NewClient(params.Logger, awsConfig, params.BuildInfo, expConfig.LogGroupName, int32(expConfig.LogRetention), expConfig.Tags, metadata.Type.String())
 	collectorIdentifier, err := uuid.NewRandom()
 	if err != nil {
 		return nil, err
 	}
 
-	logStreamManager := cwlogs.NewLogStreamManager(*svcStructuredLog)
-	multiStreamPusherFactory := cwlogs.NewMultiStreamPusherFactory(logStreamManager, *svcStructuredLog, params.Logger)
+	logStreamManager := cwlogs.NewLogStreamManager(svcStructuredLog)
+	multiStreamPusherFactory := cwlogs.NewMultiStreamPusherFactory(logStreamManager, svcStructuredLog, params.Logger)
 
 	logsExporter := &cwlExporter{
 		svcStructuredLog: svcStructuredLog,
 		Config:           expConfig,
 		logger:           params.Logger,
-		retryCount:       *awsConfig.MaxRetries,
+		retryCount:       int(awsConfig.RetryMaxAttempts),
 		collectorID:      collectorIdentifier.String(),
 		pusherFactory:    multiStreamPusherFactory,
 	}
@@ -82,7 +120,10 @@ func newCwLogsPusher(expConfig *Config, params exp.Settings) (*cwlExporter, erro
 }
 
 func newCwLogsExporter(config component.Config, params exp.Settings) (exp.Logs, error) {
-	expConfig := config.(*Config)
+	expConfig, ok := config.(*Config)
+	if !ok {
+		return nil, errors.New("invalid configuration type; can't cast to awscloudwatchlogsexporter.Config")
+	}
 	logsPusher, err := newCwLogsPusher(expConfig, params)
 	if err != nil {
 		return nil, err
@@ -99,16 +140,16 @@ func newCwLogsExporter(config component.Config, params exp.Settings) (exp.Logs, 
 	)
 }
 
-func (e *cwlExporter) consumeLogs(_ context.Context, ld plog.Logs) error {
+func (e *cwlExporter) consumeLogs(ctx context.Context, ld plog.Logs) error {
 	pusher := e.pusherFactory.CreateMultiStreamPusher()
 	var errs error
 
-	err := pushLogsToCWLogs(e.logger, ld, e.Config, pusher)
+	err := pushLogsToCWLogs(ctx, e.logger, ld, e.Config, pusher)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("Error pushing logs: %w", err))
 	}
 
-	err = pusher.ForceFlush()
+	err = pusher.ForceFlush(ctx)
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("Error flushing logs: %w", err))
 	}
@@ -120,7 +161,7 @@ func (e *cwlExporter) shutdown(_ context.Context) error {
 	return nil
 }
 
-func pushLogsToCWLogs(logger *zap.Logger, ld plog.Logs, config *Config, pusher cwlogs.Pusher) error {
+func pushLogsToCWLogs(ctx context.Context, logger *zap.Logger, ld plog.Logs, config *Config, pusher cwlogs.Pusher) error {
 	n := ld.ResourceLogs().Len()
 
 	if n == 0 {
@@ -145,7 +186,7 @@ func pushLogsToCWLogs(logger *zap.Logger, ld plog.Logs, config *Config, pusher c
 				if err != nil {
 					logger.Debug("Failed to convert to CloudWatch Log", zap.Error(err))
 				} else {
-					err := pusher.AddLogEntry(event)
+					err := pusher.AddLogEntry(ctx, event)
 					if err != nil {
 						errs = errors.Join(errs, err)
 					}
@@ -235,17 +276,12 @@ func logToCWLog(resourceAttrs map[string]any, scope pcommon.InstrumentationScope
 		}
 	}
 
-	return &cwlogs.Event{
-		InputLogEvent: &cloudwatchlogs.InputLogEvent{
-			Timestamp: aws.Int64(int64(log.Timestamp()) / int64(time.Millisecond)), // in milliseconds
-			Message:   aws.String(string(bodyJSON)),
-		},
-		StreamKey: cwlogs.StreamKey{
-			LogGroupName:  logGroupName,
-			LogStreamName: logStreamName,
-		},
-		GeneratedTime: time.Now(),
-	}, nil
+	event := cwlogs.NewEvent(int64(log.Timestamp()) / int64(time.Millisecond), string(bodyJSON)) // in milliseconds
+	event.StreamKey.LogGroupName = logGroupName
+	event.StreamKey.LogStreamName = logStreamName
+	event.GeneratedTime = time.Now()
+	
+	return event, nil
 }
 
 func attrsValue(attrs pcommon.Map) map[string]any {
@@ -253,8 +289,8 @@ func attrsValue(attrs pcommon.Map) map[string]any {
 		return nil
 	}
 	out := make(map[string]any, attrs.Len())
-	for k, v := range attrs.All() {
-		out[k] = v.AsRaw()
+	for k, v := range attrs.AsRaw() {
+		out[k] = v
 	}
 	return out
 }
