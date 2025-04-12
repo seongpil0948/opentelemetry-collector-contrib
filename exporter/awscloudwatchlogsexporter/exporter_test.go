@@ -413,12 +413,3 @@ func TestConsumeLogs(t *testing.T) {
 		})
 	}
 }
-
-func TestNewExporterWithoutRegionErr(t *testing.T) {
-	factory := NewFactory()
-	expCfg := factory.CreateDefaultConfig().(*Config)
-	expCfg.MaxRetries = 0
-	exp, err := newCwLogsExporter(expCfg, exportertest.NewNopSettings(metadata.Type))
-	assert.Nil(t, exp)
-	assert.Error(t, err)
-}

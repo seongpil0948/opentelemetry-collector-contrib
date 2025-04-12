@@ -105,8 +105,8 @@ func newCwLogsPusher(expConfig *Config, params exp.Settings) (*cwlExporter, erro
 		return nil, err
 	}
 
-	logStreamManager := cwlogs.NewLogStreamManager(*svcStructuredLog)
-	multiStreamPusherFactory := cwlogs.NewMultiStreamPusherFactory(logStreamManager, *svcStructuredLog, params.Logger)
+	logStreamManager := cwlogs.NewLogStreamManager(svcStructuredLog)
+	multiStreamPusherFactory := cwlogs.NewMultiStreamPusherFactory(logStreamManager, svcStructuredLog, params.Logger)
 
 	logsExporter := &cwlExporter{
 		svcStructuredLog: svcStructuredLog,
